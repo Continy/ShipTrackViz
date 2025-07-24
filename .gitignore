@@ -1,0 +1,9 @@
+__pycache__/
+data/
+*.csv
+*.nc
+*.json
+*.log
+llm/
+*.env
+.vscode/
