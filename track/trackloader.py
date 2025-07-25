@@ -20,15 +20,18 @@ def build_cfg(yaml_path):
     return cfg
 
 
-class DataExtractor:
+class DataInfoExtractor:
     """
     A class to extract and process basic information from data files (CSV, XLSX)
     using Pandas and a large language model.
     """
 
-    def __init__(self, path: str, cfg: CN, force_regeneration: bool = False):
+    def __init__(self,
+                 path: str | Path,
+                 cfg: CN,
+                 force_regeneration: bool = False):
         """
-        Initializes the DataExtractor.
+        Initializes the DataInfoExtractor.
 
         Args:
             llm_client: An instance of the language model client.
@@ -41,10 +44,11 @@ class DataExtractor:
         self.model = self.cfg.model
         self.encode = self.cfg.encode
         self.filetype = None
+        self.cfg.length = None
         '''Initialization'''
         # cache directory
 
-        self.cache_path = self._cache_path(path)
+        self.cache_path = self._cache_path(self.path)
         if force_regeneration and os.path.exists(self.cache_path):
             print(
                 f"Force regeneration: Deleting old cache at {self.cache_path}")
@@ -63,8 +67,8 @@ class DataExtractor:
         if not os.path.exists(self.cfg_path):
             # If the config file does not exist, create it
             with open(self.cfg_path, 'w') as f:
-                self.cfg.filetype = self._get_suffix(path)
-                self.cfg.header = self.get_header_as_json(path)
+                self.cfg.filetype = self._get_suffix(self.path)
+                self.cfg.header = self.get_header_as_json(self.path)
                 self.cfg.deltatime = self.get_delta_time(self.cfg.header)
                 self.cfg.ranges = self.get_range(self.cfg.header)
                 f.write(self.cfg.dump())
@@ -75,6 +79,9 @@ class DataExtractor:
 
     def __str__(self):
         return f"DataExtractor(path={self.path}, model={self.model}, encode={self.encode})"
+
+    def __len__(self):
+        return self.cfg.length
 
     @staticmethod
     def _cache_path(path: str) -> str:
@@ -141,7 +148,8 @@ class DataExtractor:
             contents=context,
             config=types.GenerateContentConfig(
                 thinking_config=types.ThinkingConfig(thinking_budget=0),
-                temperature=0.1,
+                temperature=self.cfg.temperature,
+                top_p=self.cfg.top_p,
             ))
         header = CN()
         header.update(dict(json.loads(response.text)))
@@ -166,6 +174,7 @@ class DataExtractor:
         # Convert the timestamp column to datetime
         df_time_column = pd.to_datetime(df_time_column.iloc[:, 0],
                                         errors='coerce')
+        self.cfg.length = df_time_column.shape[0]
         if df_time_column.isnull().all():
             raise ValueError("All timestamps are invalid or missing")
         # Calculate the time difference in seconds
@@ -259,5 +268,5 @@ if __name__ == "__main__":
     file_path = ["./data/split.csv"]
     for path in file_path:
         print(f"Processing file: {path}")
-        # Create an instance of DataExtractor
-        extractor = DataExtractor(path, cfg, force_regeneration=True)
+        # Create an instance of DataInfoExtractor
+        extractor = DataInfoExtractor(path, cfg, force_regeneration=True)
