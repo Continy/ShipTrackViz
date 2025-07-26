@@ -3,8 +3,97 @@ from utils.geo import displacement_to_latlon
 import xarray as xr
 from pathlib import Path
 from track.trackloader import DataInfoExtractor
+from track.point import TrajPoint
 import warnings
 import pandas as pd
+from tqdm.rich import tqdm
+
+
+class TrajVizContainer:
+
+    def __init__(self, traj: 'Trajectory', engine: str):
+        """
+        Initialize a TrajVizContainer with a Trajectory object.
+        :param traj: Trajectory object to visualize.
+        """
+        MATPLOTLIB = 'matplotlib'
+        PLOTLY = 'plotly'
+        WEB = 'web'
+        ALL_ENGINES = [MATPLOTLIB, PLOTLY, WEB]
+        METHODS = [self.plot_matplotlib, self.plot_plotly, self.plot_web]
+        self.traj = traj
+        self.engine = engine
+        if not isinstance(self.traj, Trajectory):
+            raise TypeError("traj must be an instance of Trajectory.")
+        if self.engine not in ALL_ENGINES:
+            raise ValueError(
+                f"Invalid engine type: {self.engine}. Must be one of {ALL_ENGINES}."
+            )
+        self.method = METHODS[ALL_ENGINES.index(self.engine)]
+
+    def plot(self, show: bool = True):
+        """
+        Plots the trajectory using the specified engine.
+        """
+        self.method(show=show)
+
+    def plot_matplotlib(self, show: bool = True):
+        """
+        Plot the trajectory using Matplotlib.
+        """
+        import matplotlib.pyplot as plt
+        from mpl_toolkits.basemap import Basemap
+
+        fig, ax = plt.subplots(figsize=(10, 10))
+        m = Basemap(projection='merc', resolution='i', ax=ax)
+        m.drawcoastlines()
+        m.drawcountries()
+        m.drawmapboundary(fill_color='aqua')
+        m.fillcontinents(color='lightgray', lake_color='aqua')
+
+        lats = [point.latitude for point in self.traj.traj_points]
+        lons = [point.longitude for point in self.traj.traj_points]
+        x, y = m(lons, lats)
+
+        m.plot(x, y, marker='o', color='red', markersize=5, linewidth=2)
+        plt.title('Trajectory Visualization')
+        plt.xlabel('Longitude')
+        plt.ylabel('Latitude')
+        plt.savefig(
+            Path(self.traj.data_info.path).parent / 'trajectory_plot.png')
+        if show:
+            plt.show()
+
+    def plot_plotly(self, show: bool = True):
+        """
+        Plot the trajectory using Plotly.
+        """
+        import plotly.graph_objects as go
+
+        lats = [point.latitude for point in self.traj.traj_points]
+        lons = [point.longitude for point in self.traj.traj_points]
+
+        fig = go.Figure(data=go.Scattergeo(lon=lons,
+                                           lat=lats,
+                                           mode='markers+lines',
+                                           marker=dict(size=5, color='red'),
+                                           line=dict(width=2, color='blue'),
+                                           name='Trajectory'))
+
+        fig.update_layout(title='Trajectory Visualization',
+                          geo=dict(scope='world',
+                                   showland=True,
+                                   landcolor='lightgray',
+                                   showlakes=True,
+                                   lakecolor='aqua'))
+        fig.write_html(
+            Path(self.traj.data_info.path).parent / 'trajectory_plot.html')
+        if show:
+            fig.show()
+
+    def plot_web(self, show: bool = True):
+        # Charts interface, Geo map interface, etc.
+        pass
 
 
 class Trajectory:
@@ -50,28 +139,16 @@ class Trajectory:
             self.sheet_path = None
 
     def info2traj(self):
-        length = self.data_info.length
+        length = self.data_info.cfg.length
         if length == 0:
             print("No TrajPoints in the trajectory to load.")
             return []
         traj_points = []
-        for i in range(length):
-            point_data = self.data_info.get_point(i)
-            if point_data is None:
-                warnings.warn(
-                    f"TrajPoint at index {i} is None, skipping this point.",
-                    UserWarning)
-                continue
-            point = TrajPoint(
-                {
-                    'latitude': point_data['latitude'],
-                    'longitude': point_data['longitude']
-                },
-                pd.to_datetime(point_data['timestamp']).to_numpy())
-            point.wind_u = point_data['wind_u']
-            point.wind_v = point_data['wind_v']
-            point.envdata = point_data['envdata']
-            point.data = point_data['data']
+        for i in tqdm(range(length),
+                      desc="Loading TrajPoints",
+                      leave=False,
+                      unit="point"):
+            point = self.data_info.get_point(i)
             traj_points.append(point)
         print(
             f"Loaded {len(traj_points)} TrajPoints from the trajectory info.")
@@ -151,6 +228,21 @@ class Trajectory:
         for point in self.traj_points:
             point.set_env_data(datapath, engine)
 
+    def useEnv(self, warning=True):
+        """
+        Use the environment data for all TrajPoints in the trajectory.
+        :param warning: If True, will show a warning about using environment data.
+        """
+        if warning:
+            warnings.warn(
+                'This method *assumes* that the GroundTruth wind data is *exactly* the same as the wind data on the ship.',
+                UserWarning)
+        if not self.traj_points:
+            print('No TrajPoints in the trajectory to use environment data.')
+            return
+        for point in self.traj_points:
+            point.useEnv(warning=False)
+
     def __getitem__(self, identifier):
         """
         Get a TrajPoint by index.
@@ -167,7 +259,14 @@ class Trajectory:
                         f"TrajPoint {point} does not have data for key '{identifier}', replacing with None."
                     )
                     result.append(None)
-            return result
+                result.append(point.data[identifier])
+            result = np.array(result)
+            if len(result) == 1:
+                return result[0]
+            elif len(result) == 0:
+                raise KeyError(f"No TrajPoint found with key '{identifier}'.")
+            else:
+                return result
         elif isinstance(identifier, list):
             print('Creating a new Trajectory subset with specified indices.')
             if not all(isinstance(i, int) for i in identifier):
@@ -194,122 +293,3 @@ class Trajectory:
 
     def __str__(self):
         return f"Trajectory with {len(self.traj_points)} points"
-
-
-class TrajPoint:
-
-    def __init__(self, location: dict, timestamp: np.datetime64):
-        # location, timestamp
-        # **states: speed: float, sail_state: int, DG_state: int, SOC: float, fuel: float
-        # location: dict, {'lat': float, 'lon': float}
-        self.location = location
-        self.latitude = location['latitude']
-        self.longitude = location['longitude']
-        self.timestamp = timestamp
-        self.father = None
-        self.envdata = None
-        self.data = {}
-        self.wind_u, self.wind_v = None, None
-
-    @classmethod
-    def follow(cls, father, disp, dt):
-        '''
-        father: TrajPoint, 父节点
-        disp: [dx, dy], 位移, m
-        dt: 时间间隔, s
-        '''
-        new_lat, new_lon = displacement_to_latlon(father.latitude,
-                                                  father.longitude, disp[0],
-                                                  disp[1])
-        new_timestamp = father.timestamp + np.timedelta64(dt, 's')
-
-        new_node = TrajPoint({
-            'latitude': new_lat,
-            'longitude': new_lon
-        }, new_timestamp)
-        new_node.father = father
-        new_node.envdata = father.envdata
-        new_node.setwind()
-        return new_node
-
-    def father(self, father: 'TrajPoint'):
-        self.father = father
-
-    def __str__(self):
-        return f"TrajPoint: {self.location}, {self.timestamp}"
-
-    def update(self, **states):
-        for key, value in states.items():
-            setattr(self, key, value)
-
-    def set_env_data(self, datapath: str, engine='netcdf4'):
-        self.envdata = xr.open_dataset(datapath, engine=engine)
-
-    def setdata(self, key, value):
-        """
-        Set data for a specific key.
-        """
-        self.data[key] = value
-
-    def useEnv(self):
-        warnings.warn(
-            'This method *assumes* that the GroundTruth wind data is *exactly* the same as the wind data on the ship.',
-            UserWarning)
-        if self.envdata is None:
-            print('No data, run TrajPoint.setdata(xr.Dataset:data) first')
-            return
-        else:
-            self.wind_u = self.envdata['u10'].interp(
-                latitude=self.latitude,
-                longitude=self.longitude,
-                time=self.timestamp).values
-            self.wind_v = self.envdata['v10'].interp(
-                latitude=self.latitude,
-                longitude=self.longitude,
-                time=self.timestamp).values
-
-    def sail_params(self, u, v):
-        '''
-        u: float, 东向船速
-        v: float, 北向船速
-        return: tuple, (phi_omega(rad), V_wap(m/s))
-        '''
-        if self.wind_u is None:
-            print('No wind, run TrajPoint.setwind() first')
-            return
-        else:
-            return self._calculate_sail_params((u, v),
-                                               (self.wind_u, self.wind_v))
-
-    def _calculate_sail_params(self, a, b):
-        # 计算向量c: c = -(a + b)
-        c = -(np.array(a) + np.array(b))
-
-        # 计算a和c之间的余弦值
-        cos_theta = np.dot(a, c) / (np.linalg.norm(a) * np.linalg.norm(c))
-
-        # 计算phi_omega: phi_omega = pi - cos_theta
-        # 注意acos返回的是弧度值
-        phi_omega = np.pi - cos_theta
-
-        return c, phi_omega
-
-
-if __name__ == '__main__':
-    ship_1 = TrajPoint({
-        'latitude': 17.2,
-        'longitude': 115.5
-    }, np.array('2024-02-04T12:00:00', dtype='datetime64[ns]'))
-
-    ship_u = 10
-    ship_v = 2
-    ship_1.setdata('/data/split/data.grib', engine='cfgrib')
-    ship_1.setwind()
-    ship_1.sail_params(ship_u, ship_v)
-    print(ship_1.timestamp)
-    print(ship_1.location)
-    print(ship_1.wind_u, ship_1.wind_v)
-    ship_2 = TrajPoint.follow(ship_1, disp=[64800, 0], dt=64800)
-    print(ship_2.location)
-    print(ship_2.timestamp)
-    print(ship_2.wind_u, ship_2.wind_v)

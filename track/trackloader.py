@@ -10,6 +10,7 @@ import shutil
 # Sheet header indentifier using LLM
 from google import genai
 from google.genai import types
+from track.point import TrajPoint
 
 
 def build_cfg(yaml_path):
@@ -76,12 +77,58 @@ class DataInfoExtractor:
             # If the config file exists, load it
             with open(self.cfg_path, 'r') as f:
                 self.cfg = CN(yaml.safe_load(f))
+            self.filetype = self.cfg.filetype
 
     def __str__(self):
         return f"DataExtractor(path={self.path}, model={self.model}, encode={self.encode})"
 
     def __len__(self):
         return self.cfg.length
+
+    def __getitem__(self, index: int) -> TrajPoint:
+        """
+        Returns the TrajPoint at the specified index.
+        """
+
+        return self.get_point(index)
+
+    def get_point(self, index: int) -> TrajPoint:
+        """
+        Returns a TrajPoint object for the given index.
+        """
+        if index < 0 or index >= self.cfg.length:
+            raise IndexError(
+                f"Index {index} out of range for data length {self.cfg.length}"
+            )
+
+        data = self.load_method(self.path,
+                                suffix=self.filetype,
+                                encoding=self.encode,
+                                skiprows=range(1, index),
+                                nrows=1)
+
+        geodata = {
+            'longitude': data.iloc[0, self.cfg.header['longitude']],
+            'latitude': data.iloc[0, self.cfg.header['latitude']],
+            'timestamp': data.iloc[0, self.cfg.header['timestamp']]
+        }
+
+        otherkeys = set(self.cfg.header.keys()) - set(geodata.keys())
+        #remove non-existing keys
+        otherkeys = [
+            key for key in otherkeys if isinstance(self.cfg.header[key], int)
+        ]
+
+        point = TrajPoint(
+            {
+                'latitude': geodata['latitude'],
+                'longitude': geodata['longitude']
+            }, pd.to_datetime(geodata['timestamp']))
+        for key in otherkeys:
+
+            point.setdata(key, data.iloc[0, self.cfg.header[key]])
+
+        return point
 
     @staticmethod
     def _cache_path(path: str) -> str:
