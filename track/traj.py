@@ -2,7 +2,7 @@ import numpy as np
 from utils.geo import displacement_to_latlon
 import xarray as xr
 from pathlib import Path
-from track.trackloader import DataInfoExtractor
+from track.trackloader import DataChunk, build_cfg
 from track.point import TrajPoint
 import warnings
 import pandas as pd
@@ -51,8 +51,8 @@ class TrajVizContainer:
         m.drawmapboundary(fill_color='aqua')
         m.fillcontinents(color='lightgray', lake_color='aqua')
 
-        lats = [point.latitude for point in self.traj.traj_points]
-        lons = [point.longitude for point in self.traj.traj_points]
+        lats = self.traj['latitude']
+        lons = self.traj['longitude']
         x, y = m(lons, lats)
 
         m.plot(x, y, marker='o', color='red', markersize=5, linewidth=2)
@@ -70,8 +70,8 @@ class TrajVizContainer:
         """
         import plotly.graph_objects as go
 
-        lats = [point.latitude for point in self.traj.traj_points]
-        lons = [point.longitude for point in self.traj.traj_points]
+        lats = self.traj['latitude']
+        lons = self.traj['longitude']
 
         fig = go.Figure(data=go.Scattergeo(lon=lons,
                                            lat=lats,
@@ -99,37 +99,33 @@ class TrajVizContainer:
 class Trajectory:
 
     def __init__(self,
-                 sheet_path: str = None,
                  traj_points: list['TrajPoint'] = None,
-                 DataInfo: DataInfoExtractor = None):
+                 Datachunk: DataChunk = None):
         """
         Initialize a trajectory with a list of TrajPoint objects.
         :param traj_points: List of TrajPoint objects.
         """
         # Two init input will lead to conflict, raise an error
+        self.chunks: list[DataChunk] = []
+        self.envdata = {}
+        # The continuous_chunk_list is used to store chunks of continuous trajectory points,
+        # A chunk is a continuous trajectory coming from the same sheet source,
+        # In a same chunk, DataChunk.get_point(i) can be replaced with ~.load_method().
 
         if traj_points is not None:
-            if DataInfo is not None and sheet_path is not None:
+            if Datachunk is not None:
                 raise ValueError(
-                    "Cannot initialize Trajectory with both traj_points and DataInfo/sheet_path."
+                    "Cannot initialize Trajectory with both traj_points and Datachunk/sheet_path."
                 )
             self.traj_points = traj_points
             self.data_info = self.traj2info()
             self.sheet_path = None
 
-        elif sheet_path is not None:
-            if DataInfo is not None:
-                raise ValueError(
-                    "Cannot initialize Trajectory with both sheet_path and traj_points/DataInfo."
-                )
-            self.sheet_path = Path(sheet_path).resolve()
-            self.data_info = DataInfoExtractor(self.sheet_path,
-                                               force_regeneration=True)
+        elif Datachunk is not None:
+            self.data_info = Datachunk
             self.traj_points = self.info2traj()
-        elif DataInfo is not None:
-            self.data_info = DataInfo
-            self.traj_points = self.info2traj()
-            self.sheet_path = DataInfo.path
+            self.sheet_path = Datachunk.path
+            self.chunks.append(Datachunk)
         else:
             warnings.warn(
                 "No traj_points or sheet_path provided, initializing empty trajectory.",
@@ -139,22 +135,54 @@ class Trajectory:
             self.sheet_path = None
 
     def info2traj(self):
+        """
+        Optimized version to load all trajectory points from the data source in bulk.
+        """
         length = self.data_info.cfg.length
         if length == 0:
             print("No TrajPoints in the trajectory to load.")
             return []
-        traj_points = []
-        for i in tqdm(range(length),
-                      desc="Loading TrajPoints",
-                      leave=False,
-                      unit="point"):
-            point = self.data_info.get_point(i)
-            traj_points.append(point)
+
+        cfg = self.data_info.cfg
+
+        latitudes = self.data_info.get_data('latitude')
+        longitudes = self.data_info.get_data('longitude')
+        timestamps = self.data_info.get_data('timestamp')
+        breakpoint()
+        timestamps = pd.to_datetime(timestamps).to_numpy()
+        primary_cols = {'latitude', 'longitude', 'timestamp'}
+        other_keys = [
+            key for key in cfg.header
+            if key not in primary_cols and isinstance(cfg.header[key], int)
+        ]
+        other_data_cols = {
+            key: self.data_info.get_data(key)
+            for key in other_keys
+        }
+
+        data_dicts = [{
+            key: other_data_cols[key][i]
+            for key in other_keys
+        } for i in range(length)]
+
+        traj_points = [
+            TrajPoint({
+                'latitude': lat,
+                'longitude': lon
+            },
+                      timestamp=ts,
+                      data=data_dict) for lat, lon, ts, data_dict in tqdm(
+                          zip(latitudes, longitudes, timestamps, data_dicts),
+                          total=length,
+                          desc="Loading TrajPoints (Optimized)",
+                          unit="point")
+        ]
+
         print(
             f"Loaded {len(traj_points)} TrajPoints from the trajectory info.")
         return traj_points
 
-    def traj2info(self, path: str):
+    def traj2info(self, path: str, cfgpath: str = './llm/data.yaml'):
         """
         Save the trajectory points to a CSV file.
         :param path: Path to save the CSV file.
@@ -196,8 +224,9 @@ class Trajectory:
         df = pd.DataFrame({**geodata, **envdata, **other_data})
         df.to_csv(path, index=False)
         print(f"Trajectory saved to {path}")
-        self.data_info = DataInfoExtractor(self.sheet_path,
-                                           force_regeneration=True)
+        self.data_info = DataChunk(path,
+                                   cfg=build_cfg(cfgpath),
+                                   force_regeneration=True)
 
     def append(self, point: 'TrajPoint'):
         """
@@ -205,28 +234,39 @@ class Trajectory:
         :param point: TrajPoint object to add.
         """
         self.traj_points.append(point)
+        #TODO: Implement chunking logic
+        # self.continuous_chunk_list.append([point])
+        # self.chunk_datapath_list.append(point.envdata)
 
-    def setenvdata(self, datapath: str, engine='netcdf4'):
+    def setwinddata(self, datapath: str, engine='netcdf4'):
         """
         Set environment data for all TrajPoints in the trajectory.
         :param datapath: Path to the environment data file.
         :param engine: Engine to use for reading the data (default is 'netcdf4').
         """
-        warnings.warn(
-            "This will *remove all linked environment data* in TrajPoints and set new data.",
-            UserWarning)
-        print("I will set new environment data for all TrajPoints. [y/n]")
-        if input().lower() != 'y':
-            print("Aborted setting environment data.")
-            return
-        if not self.traj_points:
-            print("No TrajPoints in the trajectory to set environment data.")
-            return
-        print(
-            f"Setting environment data for {len(self.traj_points)} TrajPoints from {datapath} using engine {engine}."
-        )
-        for point in self.traj_points:
-            point.set_env_data(datapath, engine)
+        self.importEnv(key='u10', envfile=datapath, engine=engine)
+        self.importEnv(key='v10', envfile=datapath, engine=engine)
+        self.importEnv(key='u100', envfile=datapath, engine=engine)
+        self.importEnv(key='v100', envfile=datapath, engine=engine)
+        self.envdata['w10'] = np.sqrt(self.envdata['u10']**2 +
+                                      self.envdata['v10']**2)
+        self.envdata['w10_angle'] = np.arctan2(
+            self.envdata['v10'], self.envdata['u10']) * 180 / np.pi
+        self.envdata['w100'] = np.sqrt(self.envdata['u100']**2 +
+                                       self.envdata['v100']**2)
+        self.envdata['w100_angle'] = np.arctan2(
+            self.envdata['v100'], self.envdata['u100']) * 180 / np.pi
+
+        indices = self.chunk2index()
+        for chunk, index in zip(self.chunks, indices):
+            tqdm.pandas(desc="Setting w10 and w100 data for TrajPoints",
+                        unit="point")
+            for i, point in tqdm(enumerate(
+                    self.traj_points[index[0]:index[1]]),
+                                 total=index[1] - index[0]):
+                point.setwind10(point.data['u10'], point.data['v10'])
+                point.setwind100(point.data['u100'], point.data['v100'])
+            print("Wind data set for all TrajPoints in the trajectory.")
 
     def useEnv(self, warning=True):
         """
@@ -243,6 +283,68 @@ class Trajectory:
         for point in self.traj_points:
             point.useEnv(warning=False)
 
+    def importEnv(self, key: str, envfile: str, engine: str = 'cfgrib'):
+        """
+        Import environment data for all TrajPoints in the trajectory.
+        This method is called automatically when setting environment data.
+        """
+
+        if not self.traj_points:
+            print(
+                "No TrajPoints in the trajectory to import environment data.")
+            return
+        indices = self.chunk2index()
+        for chunk, index in zip(self.chunks, indices):
+            time_coords = chunk.get_data('timestamp')
+            lat_coords = chunk.get_data('latitude')
+            lon_coords = chunk.get_data('longitude')
+            time_coords = xr.DataArray(pd.to_datetime(time_coords).to_numpy(),
+                                       dims='points')
+            lat_coords = xr.DataArray(lat_coords, dims='points')
+            lon_coords = xr.DataArray(lon_coords, dims='points')
+            envdata = xr.open_dataset(envfile,
+                                      engine=engine,
+                                      decode_timedelta=True)
+            interp_values = envdata[key].interp(latitude=lat_coords,
+                                                longitude=lon_coords,
+                                                time=time_coords).values
+            self.envdata[key] = interp_values
+            tqdm.pandas(desc=f"Importing {key} data for TrajPoints",
+                        unit="point")
+            for i, point in tqdm(enumerate(
+                    self.traj_points[index[0]:index[1]]),
+                                 total=index[1] - index[0]):
+                point.setdata(key, interp_values[i])
+        print(f"Imported environment data '{key}' for all TrajPoints.")
+
+    def adhere(self, Traj: 'Trajectory'):
+        """
+        Adhere another trajectory to this one.
+        :param Trajectory: The trajectory to adhere.
+        """
+        #TODO: Implement adherence logic
+        if not isinstance(Traj, Trajectory):
+            raise TypeError("Trajectory must be an instance of 'Trajectory'.")
+        self.traj_points.extend(Traj.traj_points)
+        self.data_info = self.traj2info(self.sheet_path)
+        self.continuous_chunk_list += Traj.continuous_chunk_list
+        self.chunk_datapath_list += Traj.chunk_datapath_list
+        print(f"Adhered {len(Traj.traj_points)} points to the trajectory.")
+
+    def chunk2index(self):
+        """
+
+        Convert the continuous chunk list to a list of indices.
+        :return: List of indices corresponding to the continuous chunks.
+        """
+        indices = []
+        end = 0
+        for chunk in self.chunks:
+            start = end
+            end += chunk.cfg.length
+            indices.append((start, end))
+        return indices
+
     def __getitem__(self, identifier):
         """
         Get a TrajPoint by index.
@@ -253,13 +355,16 @@ class Trajectory:
             return self.traj_points[identifier]
         elif isinstance(identifier, str):
             result = []
-            for point in self.traj_points:
-                if identifier not in point.data:
-                    warnings.warn(
-                        f"TrajPoint {point} does not have data for key '{identifier}', replacing with None."
+            if identifier in self.envdata:
+                result.extend(self.envdata[identifier])
+                return np.array(result)
+            for chunk in self.chunks:
+                if identifier not in chunk.cfg.header:
+                    raise KeyError(
+                        f"Identifier '{identifier}' not found in trajectory chunks."
                     )
-                    result.append(None)
-                result.append(point.data[identifier])
+                else:
+                    result.extend(chunk.get_data(identifier))
             result = np.array(result)
             if len(result) == 1:
                 return result[0]

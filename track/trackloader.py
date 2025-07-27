@@ -21,7 +21,7 @@ def build_cfg(yaml_path):
     return cfg
 
 
-class DataInfoExtractor:
+class DataChunk:
     """
     A class to extract and process basic information from data files (CSV, XLSX)
     using Pandas and a large language model.
@@ -30,9 +30,10 @@ class DataInfoExtractor:
     def __init__(self,
                  path: str | Path,
                  cfg: CN,
-                 force_regeneration: bool = False):
+                 force_regeneration: bool = False,
+                 datarange: list = None):
         """
-        Initializes the DataInfoExtractor.
+        Initializes the DataChunk instance.
 
         Args:
             llm_client: An instance of the language model client.
@@ -43,9 +44,10 @@ class DataInfoExtractor:
         self.client = genai.Client()
         self.cfg = cfg
         self.model = self.cfg.model
-        self.encode = self.cfg.encode
+        self.encode = self.cfg.encode if 'encode' in self.cfg else 'utf-8'
         self.filetype = None
         self.cfg.length = None
+        self.datarange = datarange
         '''Initialization'''
         # cache directory
 
@@ -104,7 +106,7 @@ class DataInfoExtractor:
         data = self.load_method(self.path,
                                 suffix=self.filetype,
                                 encoding=self.encode,
-                                skiprows=range(1, index),
+                                skiprows=range(1, index + self.datarange[0]),
                                 nrows=1)
 
         geodata = {
@@ -215,7 +217,10 @@ class DataInfoExtractor:
             suffix=self.filetype,
             encoding=self.encode,
             usecols=[timestamp_index],
-        )
+            skiprows=range(1, self.datarange[0] +
+                           1) if self.datarange else None,
+            nrows=self.datarange[1] -
+            self.datarange[0] if self.datarange else None)
         if df_time_column.empty:
             raise ValueError("Timestamp column is empty")
         # Convert the timestamp column to datetime
@@ -229,6 +234,22 @@ class DataInfoExtractor:
         if pd.isna(time_diff):
             raise ValueError("Time difference calculation resulted in NaN")
         return time_diff.total_seconds() if time_diff else None
+
+    def get_data(self, key: str) -> np.ndarray:
+        index = self.cfg.header[key]
+        if index is None:
+            raise ValueError(f"Key '{key}' not found in header")
+        df = self.load_method(self.path,
+                              suffix=self.filetype,
+                              encoding=self.encode,
+                              usecols=[index],
+                              skiprows=range(1, self.datarange[0] +
+                                             1) if self.datarange else None,
+                              nrows=self.datarange[1] -
+                              self.datarange[0] if self.datarange else None)
+        if df.empty:
+            raise ValueError(f"Column {key} is empty")
+        return df.iloc[:, 0].to_numpy()
 
     def get_range(self, header_json: CN) -> CN:
         """
@@ -245,7 +266,10 @@ class DataInfoExtractor:
                 suffix=self.filetype,
                 encoding=self.encode,
                 usecols=[index],
-            )
+                skiprows=range(1, self.datarange[0] +
+                               1) if self.datarange else None,
+                nrows=self.datarange[1] -
+                self.datarange[0] if self.datarange else None)
             if df.empty:
                 raise ValueError(f"Column {key} is empty")
             if key == 'timestamp':
@@ -315,5 +339,5 @@ if __name__ == "__main__":
     file_path = ["./data/split.csv"]
     for path in file_path:
         print(f"Processing file: {path}")
-        # Create an instance of DataInfoExtractor
-        extractor = DataInfoExtractor(path, cfg, force_regeneration=True)
+        # Create an instance of DataChunk
+        chunk = DataChunk(path, cfg, force_regeneration=True)
