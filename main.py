@@ -12,12 +12,14 @@ chunk = DataChunk(
     path,
     cfg=llm_cfg,
     #   datarange=(0, 100000),
-    force_regeneration=True,
+    force_regeneration=False,
     encode='GBK')
 traj = Trajectory(Datachunk=chunk)
+
 # traj.setwinddata('./data/Uruguay.grib', engine='cfgrib')
 # sensor_wind_speed = traj['true_wind_speed'] * 0.5144
 # w10 = traj['w10']
 # w100 = traj['w100']
-visualizer = TrajVizContainer(traj, engine='plotly')
-visualizer.plot(show=True)
+visualizer = TrajVizContainer(traj, engine='webgl')
+
+visualizer.launch_web_app(port=8000)

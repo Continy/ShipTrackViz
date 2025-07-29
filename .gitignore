@@ -7,3 +7,4 @@ data/
 llm/
 *.env
 .vscode/
+env.*

@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html>
+<head>
+    <meta charset='utf-8' />
+    <title>Ship Track Visualization (Flask + CesiumJS)</title>
+    <script src="https://cesium.com/downloads/cesiumjs/releases/1.131/Build/Cesium/Cesium.js"></script>
+    <link href="https://cesium.com/downloads/cesiumjs/releases/1.131/Build/Cesium/Widgets/widgets.css" rel="stylesheet">
+    <script src='https://cdn.jsdelivr.net/npm/echarts@5.3.3/dist/echarts.min.js'></script>
+    
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+
+</head>
+<body>
+
+<div id="cesiumContainer"></div>
+<div id="sidebar">
+    <h3>Data Charts</h3>
+    <div id="charts-container"></div>
+    <h3>Test</h3>
+    <div id="info-panel">
+        <h3>Track Point Info</h3>
+        <pre id="info-content">Click on a point to see details</pre>
+    </div>
+</div>
+<div id="loading-overlay">
+    <div class="loading-container">
+        <div class="loading-title">Loading Trajectory Data...</div>
+        <div class="progress-bar-container">
+            <div id="progress-bar" class="progress-bar"></div>
+        </div>
+        <div id="progress-text" class="progress-text">0%</div>
+    </div>
+</div>
+<script src ="{{ url_for('static', filename='js/env.js') }}"></script>
+<script src="{{ url_for('static', filename='js/main.js') }}"></script>
+
+</body>
+</html>

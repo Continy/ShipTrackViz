@@ -24,6 +24,8 @@ class TrajPoint:
         self.data['latitude'] = self.latitude
         self.data['longitude'] = self.longitude
         self.data['timestamp'] = self.timestamp
+        for key, value in data.items():
+            self.data[key] = value
 
     @classmethod
     def follow(cls, parent, disp, dt):

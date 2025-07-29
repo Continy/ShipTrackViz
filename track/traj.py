@@ -2,7 +2,9 @@ import numpy as np
 import xarray as xr
 import warnings
 import pandas as pd
-
+import webbrowser
+import json
+import os
 from tqdm.rich import tqdm
 from pathlib import Path
 from track.trackloader import DataChunk
@@ -20,9 +22,9 @@ class TrajVizContainer:
         """
         MATPLOTLIB = 'matplotlib'
         PLOTLY = 'plotly'
-        WEB = 'web'
+        WEB = 'webgl'
         ALL_ENGINES = [MATPLOTLIB, PLOTLY, WEB]
-        METHODS = [self.plot_matplotlib, self.plot_plotly, self.plot_web]
+        METHODS = [self.plot_matplotlib, self.plot_plotly, self.launch_web_app]
         self.traj = traj
         self.engine = engine
         if not isinstance(self.traj, Trajectory):
@@ -37,7 +39,7 @@ class TrajVizContainer:
         """
         Plots the trajectory using the specified engine.
         """
-        self.method(show=show)
+        return self.method(show=show)
 
     def plot_matplotlib(self, show: bool = True):
         """
@@ -93,9 +95,22 @@ class TrajVizContainer:
         if show:
             fig.show()
 
-    def plot_web(self, show: bool = True):
-        # Charts interface, Geo map interface, etc.
-        pass
+    def launch_web_app(self, host='127.0.0.1', port=5000, debug=True):
+        """
+        启动 Flask 应用以进行可视化。
+        这个方法取代了原来的 plot_web。
+        """
+        # 从 app.py 导入应用创建函数和数据设置函数
+        from app import create_app, set_trajectory_data
+
+        # 将轨迹数据传递给 app 模块
+        set_trajectory_data(self.traj)
+
+        # 创建并运行 Flask 应用
+        app = create_app()
+        print(f"Starting Flask server for trajectory visualization...")
+        print(f"Please open your browser to http://{host}:{port}/")
+        app.run(host=host, port=port, debug=debug)
 
 
 class Trajectory:
