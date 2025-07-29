@@ -1,12 +1,14 @@
 import numpy as np
-from utils.geo import displacement_to_latlon
 import xarray as xr
-from pathlib import Path
-from track.trackloader import DataChunk, build_cfg
-from track.point import TrajPoint
 import warnings
 import pandas as pd
+
 from tqdm.rich import tqdm
+from pathlib import Path
+from track.trackloader import DataChunk
+from track.point import TrajPoint
+from utils.geo import displacement_to_latlon
+from utils.cfg import build_cfg
 
 
 class TrajVizContainer:
@@ -148,7 +150,6 @@ class Trajectory:
         latitudes = self.data_info.get_data('latitude')
         longitudes = self.data_info.get_data('longitude')
         timestamps = self.data_info.get_data('timestamp')
-        breakpoint()
         timestamps = pd.to_datetime(timestamps).to_numpy()
         primary_cols = {'latitude', 'longitude', 'timestamp'}
         other_keys = [

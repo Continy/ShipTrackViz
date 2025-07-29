@@ -11,14 +11,8 @@ import shutil
 from google import genai
 from google.genai import types
 from track.point import TrajPoint
-
-
-def build_cfg(yaml_path):
-
-    with open(yaml_path, 'r') as f:
-        cfg = CN(yaml.safe_load(f))
-
-    return cfg
+from utils.cfg import build_cfg
+from utils.llmengine import LLMEngine
 
 
 class DataChunk:
@@ -29,9 +23,10 @@ class DataChunk:
 
     def __init__(self,
                  path: str | Path,
-                 cfg: CN,
+                 cfg: str,
                  force_regeneration: bool = False,
-                 datarange: list = None):
+                 datarange: list = None,
+                 encode: str = 'utf-8'):
         """
         Initializes the DataChunk instance.
 
@@ -42,9 +37,10 @@ class DataChunk:
         """
         self.path = str(Path(path).resolve())
         self.client = genai.Client()
-        self.cfg = cfg
+        self.cfg = build_cfg(cfg)
         self.model = self.cfg.model
-        self.encode = self.cfg.encode if 'encode' in self.cfg else 'utf-8'
+        self.cfg.encode = encode
+        self.encode = encode
         self.filetype = None
         self.cfg.length = None
         self.datarange = datarange
@@ -190,18 +186,11 @@ class DataChunk:
         header_str = str(header_list)
         prompt_template = self.read_txt(self.cfg.header_getter)
         context = f"{header_str}<<{prompt_template}>>"
-
-        # Assuming your client has a 'generate_text' method like the one provided
-        response = self.client.models.generate_content(
-            model=self.model,
-            contents=context,
-            config=types.GenerateContentConfig(
-                thinking_config=types.ThinkingConfig(thinking_budget=0),
-                temperature=self.cfg.temperature,
-                top_p=self.cfg.top_p,
-            ))
+        llmengine = LLMEngine(model_name=self.model,
+                              yaml_path=self.cfg.yamlpath)
+        response = llmengine(context)
         header = CN()
-        header.update(dict(json.loads(response.text)))
+        header.update(dict(json.loads(response)))
 
         return header
 
