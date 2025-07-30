@@ -98,18 +98,32 @@ class TrajVizContainer:
     def launch_web_app(self, host='127.0.0.1', port=5000, debug=True):
         """
         启动 Flask 应用以进行可视化。
-        这个方法取代了原来的 plot_web。
         """
+        import os
+        import subprocess
+        import platform
+
+        # 简单粗暴地杀死端口上的进程
+        try:
+            if platform.system() == "Darwin":  # macOS
+                os.system(f"lsof -ti:{port} | xargs kill -9")
+            elif platform.system() == "Linux":
+                os.system(f"fuser -k {port}/tcp")
+            elif platform.system() == "Windows":
+                os.system(
+                    f"netstat -ano | findstr :{port} | findstr LISTENING | for /f \"tokens=5\" %i in ('more') do taskkill /F /PID %i"
+                )
+        except:
+            pass  # 忽略错误，继续启动
+
         # 从 app.py 导入应用创建函数和数据设置函数
         from app import create_app, set_trajectory_data
-
-        # 将轨迹数据传递给 app 模块
         set_trajectory_data(self.traj)
-
-        # 创建并运行 Flask 应用
         app = create_app()
+
         print(f"Starting Flask server for trajectory visualization...")
         print(f"Please open your browser to http://{host}:{port}/")
+
         app.run(host=host, port=port, debug=debug)
 
 
@@ -207,35 +221,51 @@ class Trajectory:
             print("No TrajPoints in the trajectory to save.")
             return
         geodata = {
-            'latitude': [point.latitude for point in self.traj_points],
-            'longitude': [point.longitude for point in self.traj_points],
-            'timestamp': [point.timestamp for point in self.traj_points]
+            'latitude':
+            self['latitude'],
+            'longitude':
+            self['longitude'],
+            'timestamp':
+            self['timestamp']
+            if 'timestamp' in self.traj_points[0].data else None
         }
         envdata = {
-            'wind_u': [point.wind_u for point in self.traj_points],
-            'wind_v': [point.wind_v for point in self.traj_points],
-            'u10': [
-                point.envdata['u10'].values if point.envdata else None
-                for point in self.traj_points
-            ],
-            'v10': [
-                point.envdata['v10'].values if point.envdata else None
-                for point in self.traj_points
-            ],
-            'u100': [
-                point.envdata['u100'].values if point.envdata else None
-                for point in self.traj_points
-            ],
-            'v100': [
-                point.envdata['v100'].values if point.envdata else None
-                for point in self.traj_points
-            ]
+            'wind_u':
+            self['wind_u'] if 'wind_u' in self.traj_points[0].data else None,
+            'wind_v':
+            self['wind_v'] if 'wind_v' in self.traj_points[0].data else None,
+            'true_wind_speed':
+            self['true_wind_speed']
+            if 'true_wind_speed' in self.traj_points[0].data else None,
+            'true_wind_direction':
+            self['true_wind_direction']
+            if 'true_wind_direction' in self.traj_points[0].data else None,
+            'w10':
+            self['w10'] if 'w10' in self.traj_points[0].data else None,
+            'w100':
+            self['w100'] if 'w100' in self.traj_points[0].data else None,
+            'w10_angle':
+            self['w10_angle']
+            if 'w10_angle' in self.traj_points[0].data else None,
+            'w100_angle':
+            self['w100_angle']
+            if 'w100_angle' in self.traj_points[0].data else None,
+            'u10':
+            self['u10'] if 'u10' in self.traj_points[0].data else None,
+            'v10':
+            self['v10'] if 'v10' in self.traj_points[0].data else None,
+            'u100':
+            self['u100'] if 'u100' in self.traj_points[0].data else None,
+            'v100':
+            self['v100'] if 'v100' in self.traj_points[0].data else None
         }
         other_data_keys = self.traj_points[0].data.keys(
         ) if self.traj_points else []
         other_data = {
-            key: [point.data.get(key, None) for point in self.traj_points]
+            key: [self[key] for key in other_data_keys]
+            if key not in geodata and key not in envdata else None
             for key in other_data_keys
+            if key not in geodata and key not in envdata
         }
         df = pd.DataFrame({**geodata, **envdata, **other_data})
         df.to_csv(path, index=False)

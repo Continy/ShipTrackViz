@@ -26,7 +26,8 @@ class DataChunk:
                  cfg: str,
                  force_regeneration: bool = False,
                  datarange: list = None,
-                 encode: str = 'utf-8'):
+                 encode: str = 'utf-8',
+                 clip: dict = {}):
         """
         Initializes the DataChunk instance.
 
@@ -41,6 +42,7 @@ class DataChunk:
         self.model = self.cfg.model
         self.cfg.encode = encode
         self.encode = encode
+        self.clip = clip
         self.filetype = None
         self.cfg.length = None
         self.datarange = datarange
@@ -238,7 +240,10 @@ class DataChunk:
                               self.datarange[0] if self.datarange else None)
         if df.empty:
             raise ValueError(f"Column {key} is empty")
-        return df.iloc[:, 0].to_numpy()
+        data = df.iloc[:, 0].to_numpy()
+        if key in self.clip:
+            data = self.clip[key](data=data)
+        return data
 
     def get_range(self, header_json: CN) -> CN:
         """
@@ -282,8 +287,11 @@ class DataChunk:
                     float(df[df >= 0].max())
                 ]
                 continue
-            min_val = df.iloc[:, 0].min()
-            max_val = df.iloc[:, 0].max()
+            data = df.iloc[:, 0].to_numpy()
+            if key in self.clip:
+                data = self.clip[key](data=data)
+            min_val = np.nanmin(data)
+            max_val = np.nanmax(data)
             range_CN[key] = CN()
             range_CN[key].min = float(min_val)
             range_CN[key].max = float(max_val)

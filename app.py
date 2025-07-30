@@ -112,6 +112,7 @@ def create_app():
                 point_properties = {
                     'timestamp_iso': ts.to_pydatetime().isoformat() + "Z"
                 }
+                point_properties['id'] = point_id
                 for key in other_data:
                     if np.isnan(other_data[key][i]):
                         continue
@@ -122,12 +123,6 @@ def create_app():
                     "name": f"Track Point {i}",
                     "position": {
                         "cartographicDegrees": [lons[i], lats[i], 100]
-                    },
-                    "billboard": {
-                        "scale": 1.0,
-                        "eyeOffset": {
-                            "cartesian": [0, 0, -10]
-                        }
                     },
                     "properties": point_properties
                 })

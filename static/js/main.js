@@ -1,12 +1,15 @@
 document.addEventListener('DOMContentLoaded', function () {
     const viewer = new Cesium.Viewer('cesiumContainer', {
-        terrain: Cesium.Terrain.fromWorldTerrain(),
+        terrain: Cesium.Terrain.fromWorldTerrain({
+            requestVertexNormals: true,
+            requestWaterMask: true,
+        }),
         infoBox: false,
-        selectionIndicator: false,
+        selectionIndicator: true,
         shouldAnimate: true,
     });
     viewer.scene.globe.enableLighting = true;
-
+    viewer.scene.globe.depthTestAgainstTerrain = true;
     const loadingOverlay = document.getElementById('loading-overlay');
     const progressBar = document.getElementById('progress-bar');
     const progressText = document.getElementById('progress-text');
@@ -87,8 +90,7 @@ document.addEventListener('DOMContentLoaded', function () {
             for (let i = 0; i < entities.length; i++) {
                 const entity = entities[i];
                 if (entity.id.startsWith('point_')) {
-                    // 移除billboard，使用point
-                    entity.billboard = undefined;
+
                     entity.point = new Cesium.PointGraphics({
                         pixelSize: 8,
                         color: Cesium.Color.ORANGERED,
@@ -109,12 +111,163 @@ document.addEventListener('DOMContentLoaded', function () {
 
             // 6. 等待 Cesium 场景渲染完成并缩放到轨迹
             await viewer.zoomTo(czmlDataSource);
-
+            // 7. 跟踪实体
+            await trackEntity(viewer, entities);
             loadingOverlay.classList.add('hidden');
 
         } catch (error) {
             console.error('Initialization failed:', error);
             loadingOverlay.innerHTML = `<div class="loading-container"><div class="loading-title">Error</div><div>Could not load visualization data. Please check console.</div></div>`;
+        }
+    }
+    async function trackEntity(viewer, entities) {
+        try {
+            const pointEntities = entities.filter(entity => entity.id.startsWith('point_'));
+            if (pointEntities.length === 0) {
+                console.warn('No point entities found for tracking');
+                return;
+            }
+
+            // 获取时间范围
+            console.log(`Tracking ${pointEntities.length} entities`);
+            const firstEntity = pointEntities[0];
+            const lastEntity = pointEntities[pointEntities.length - 1];
+
+            const startTime = Cesium.JulianDate.fromIso8601(firstEntity.properties.timestamp_iso._value);
+            const stopTime = Cesium.JulianDate.fromIso8601(lastEntity.properties.timestamp_iso._value);
+
+            // 构建位置属性
+            const trackPositionProperty = new Cesium.SampledPositionProperty();
+
+            pointEntities.forEach(entity => {
+                const time = Cesium.JulianDate.fromIso8601(entity.properties.timestamp_iso._value);
+                const position = entity.position.getValue(time);
+                if (position) {
+                    trackPositionProperty.addSample(time, position);
+                }
+            });
+
+            trackPositionProperty.setInterpolationOptions({
+                interpolationDegree: 1,
+                interpolationAlgorithm: Cesium.LagrangePolynomialApproximation
+            });
+
+            // 使用VelocityOrientationProperty，它会自动计算方向
+            const orientationProperty = new Cesium.CallbackProperty(function (time, result) {
+                // 先获取基础的VelocityOrientation
+                const velocityOrientationProperty = new Cesium.VelocityOrientationProperty(trackPositionProperty);
+                const baseOrientation = velocityOrientationProperty.getValue(time);
+
+                if (!baseOrientation) return result;
+
+                // 定义角度偏移（以弧度为单位）
+                const headingOffset = Math.PI;    // 180度偏移 - 根据需要调整
+                const pitchOffset = 0;            // 俯仰角偏移
+                const rollOffset = 0;             // 滚转角偏移
+
+                // 创建偏移的HeadingPitchRoll
+                const offsetHPR = new Cesium.HeadingPitchRoll(headingOffset, pitchOffset, rollOffset);
+
+                // 将偏移转换为四元数
+                const offsetQuaternion = Cesium.Quaternion.fromHeadingPitchRoll(offsetHPR);
+
+                // 应用偏移到基础方向
+                return Cesium.Quaternion.multiply(baseOrientation, offsetQuaternion, result);
+            }, false);
+            // 尝试加载Ion资源
+            let modelUri;
+            try {
+                modelUri = await Cesium.IonResource.fromAssetId(3588133);
+                console.log('Ion model loaded successfully');
+            } catch (ionError) {
+                console.warn('Failed to load Ion model, using fallback:', ionError);
+                modelUri = null;
+            }
+
+            // 创建船只实体
+            const shipEntity = viewer.entities.add({
+                availability: new Cesium.TimeIntervalCollection([
+                    new Cesium.TimeInterval({
+                        start: startTime,
+                        stop: stopTime
+                    })
+                ]),
+                name: "Tracked Ship",
+                position: trackPositionProperty,
+                orientation: orientationProperty,
+
+                // 使用Ion模型或降级到基本几何体
+                model: modelUri ? {
+                    uri: modelUri,
+                    minimumPixelSize: 64,
+                    maximumScale: 20000,
+                    scale: 100.0
+                } : undefined,
+
+                // 如果没有模型，使用几何体
+                ellipsoid: !modelUri ? {
+                    radii: new Cesium.Cartesian3(25.0, 10.0, 5.0),
+                    material: Cesium.Color.BLUE.withAlpha(0.8),
+                    outline: true,
+                    outlineColor: Cesium.Color.WHITE
+                } : undefined,
+
+                path: {
+                    width: 3,
+                    material: new Cesium.PolylineGlowMaterialProperty({
+                        glowPower: 0.2,
+                        color: Cesium.Color.YELLOW
+                    }),
+                    leadTime: 0,
+                    trailTime: 3600,
+                    resolution: 120
+                },
+
+                label: {
+                    text: 'Ship',
+                    font: '12pt sans-serif',
+                    pixelOffset: new Cesium.Cartesian2(0, -40),
+                    fillColor: Cesium.Color.WHITE,
+                    outlineColor: Cesium.Color.BLACK,
+                    outlineWidth: 2,
+                    style: Cesium.LabelStyle.FILL_AND_OUTLINE
+                }
+            });
+
+            // 设置时钟和相机
+            viewer.clock.startTime = startTime;
+            viewer.clock.stopTime = stopTime;
+            viewer.clock.currentTime = startTime;
+            viewer.clock.clockRange = Cesium.ClockRange.LOOP_STOP;
+            viewer.clock.multiplier = 60;
+
+            viewer.trackedEntity = shipEntity;
+
+            // 初始相机位置
+            const firstPosition = trackPositionProperty.getValue(startTime);
+            if (firstPosition) {
+                const cartographic = Cesium.Cartographic.fromCartesian(firstPosition);
+                const longitude = Cesium.Math.toDegrees(cartographic.longitude);
+                const latitude = Cesium.Math.toDegrees(cartographic.latitude);
+
+                await viewer.camera.flyTo({
+                    destination: Cesium.Cartesian3.fromDegrees(longitude, latitude, 5000),
+                    orientation: {
+                        heading: Cesium.Math.toRadians(0),
+                        pitch: Cesium.Math.toRadians(-45),
+                        roll: 0
+                    },
+                    duration: 3
+                });
+            }
+
+            viewer.clock.shouldAnimate = true;
+            console.log(`Ship tracking initialized with ${pointEntities.length} waypoints`);
+            return shipEntity;
+
+        } catch (error) {
+            console.error('Error in trackEntity:', error);
+            throw error;
         }
     }
 
