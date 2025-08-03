@@ -113,6 +113,8 @@ def create_app():
                     'timestamp_iso': ts.to_pydatetime().isoformat() + "Z"
                 }
                 point_properties['id'] = point_id
+                point_properties['latitude'] = lats[i]
+                point_properties['longitude'] = lons[i]
                 for key in other_data:
                     if np.isnan(other_data[key][i]):
                         continue

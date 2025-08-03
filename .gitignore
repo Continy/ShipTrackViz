@@ -8,3 +8,5 @@ llm/
 *.env
 .vscode/
 env.*
+figure/
+test*.*
